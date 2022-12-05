@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/kpng/client/localsink"
 	"sigs.k8s.io/kpng/client/localsink/fullstate"
 	"sigs.k8s.io/kpng/client/localsink/fullstate/fullstatepipe"
+	"sigs.k8s.io/kpng/client/plugins/conntrack"
 )
 
 var ebc ebpfController
@@ -37,6 +38,8 @@ func init() {
 }
 
 func (s *backend) BindFlags(flags *pflag.FlagSet) {
+	s.cfg.BindFlags(flags)
+	BindFlags(flags)
 }
 
 func (s *backend) Reset() { /* noop */ }
@@ -48,8 +51,8 @@ func (s *backend) Reset() { /* noop */ }
 // }
 
 func (s *backend) Setup() {
+	klog.Infof("Loading ebpf maps and program")
 	ebc = ebpfSetup()
-	klog.Infof("Loading ebpf maps and program %+v", ebc)
 }
 
 func (b *backend) Sync() { /* no-op */ }
@@ -57,8 +60,13 @@ func (b *backend) Sync() { /* no-op */ }
 func (b *backend) Sink() localsink.Sink {
 	sink := fullstate.New(&b.cfg)
 
+	PreRun()
+
+	ct := conntrack.New()
+
 	sink.Callback = fullstatepipe.New(fullstatepipe.ParallelSendSequenceClose,
 		ebc.Callback,
+		ct.Callback,
 	).Callback
 
 	sink.SetupFunc = b.Setup
