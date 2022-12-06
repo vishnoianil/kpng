@@ -66,7 +66,7 @@ type EpIP struct {
 
 func (ctx *renderContext) addServiceEndpoints(serviceEndpoints *fullstate.ServiceEndpoints) {
 	const daddrLocal = "fib daddr type local "
-
+	table := ctx.table
 	svc := serviceEndpoints.Service
 	endpoints := serviceEndpoints.Endpoints
 
@@ -74,7 +74,7 @@ func (ctx *renderContext) addServiceEndpoints(serviceEndpoints *fullstate.Servic
 	endpointIPs := ctx.epIPs(endpoints)
 	ctx.epCount += len(endpointIPs)
 
-	_, dnatChainName, _ := ctx.svcChainNames(svc)
+	_, dnatChainName, filterChainName := ctx.svcChainNames(svc)
 
 	dnatChain := ctx.table.Chains.Get(dnatChainName)
 	for _, epIP := range endpointIPs {
@@ -83,6 +83,58 @@ func (ctx *renderContext) addServiceEndpoints(serviceEndpoints *fullstate.Servic
 
 	// write service chain(s)
 	ctx.addSvcChain(svc, endpointIPs)
+	
+	// add the service IPs to the dispatch
+	clusterIPs := &localv1.IPSet{}
+
+	if svc.IPs.ClusterIPs != nil && svc.Type == "NodePort" {
+		clusterIPs.AddSet(svc.IPs.ClusterIPs)
+	}
+
+	ips := table.IPsFromSet(clusterIPs)
+
+	if len(ips) == 0 {
+		// nothing to contribute to the dispatch vmaps
+		return
+	}
+
+	for _, i := range []struct {
+		suffix, target string
+	}{
+		{"_dnat", dnatChainName},
+		{"_filter", filterChainName},
+	} {
+		if ctx.table.Chains.Get(i.target).Len() == 0 {
+			continue
+		}
+
+		vmapItem := ctx.table.Chains.GetItem("nodeports_clusterips" + i.suffix)
+		vmap := vmapItem.Value()
+
+		first := false
+		if vmap.Len() == 0 {
+			// first time here
+			vmap.WriteString("  " + ctx.table.Family + " daddr vmap {\n    ")
+			vmapItem.Defer(func(vmap *Leaf) {
+				vmap.WriteString(" }\n")
+			})
+			first = true
+		}
+
+		for idx, ip := range ips {
+			if first {
+				first = false
+			} else if idx%5 == 0 {
+				vmap.WriteString(",\n    ")
+			} else {
+				vmap.WriteString(", ")
+			}
+
+			vmap.WriteString(ip)
+			vmap.WriteString(": jump ")
+			vmap.WriteString(i.target)
+		}
+	}
 
 }
 

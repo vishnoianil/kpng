@@ -424,37 +424,38 @@ func makeEbpfMaps(svcMapping svcEndpointMapping) (svcKeys []bpfV4Key, svcValues 
 }
 
 func addDispatchChains(table *nftable) {
-	dnatAll := table.Chains.Get("z_dnat_all")
+	npDnatAll := table.Chains.Get("nodeports_dnat")
 	if *withTrace {
-		dnatAll.WriteString("  meta nftrace set 1\n")
+		npDnatAll.WriteString("  meta nftrace set 1\n")
 	}
 
-	if table.Chains.Has("dnat_external") {
-		fmt.Fprint(dnatAll, "  jump dnat_external\n")
-	}
-
-	if table.Chains.Has("nodeports_dnat") {
-		dnatAll.WriteString("  fib daddr type local jump nodeports_dnat\n")
-	}
-
-	if dnatAll.Len() != 0 {
+	if npDnatAll.Len() != 0 {
 		for _, hook := range []string{"prerouting"} {
 			fmt.Fprintf(table.Chains.Get("z_hook_nat_"+hook),
-				"  type nat hook "+hook+" priority %d;\n  jump z_dnat_all\n", *hookPrio)
+				"  type nat hook "+hook+" priority %d;\n  fib daddr type local jump nodeports_dnat\n", *hookPrio)
 		}
+	}
+
+	vmapItem := table.Chains.GetItem("nodeports_clusterips_dnat")
+	vmap := vmapItem.Value()
+	if vmap.Len() != 0 {
+		npCipDnatAll := table.Chains.Get("nodeports_clusterips_dnat")
+		if *withTrace {
+			npCipDnatAll.WriteString("  meta nftrace set 1\n")
+		}
+	
+		if npDnatAll.Len() != 0 {
+			for _, hook := range []string{"output"} {
+				fmt.Fprintf(table.Chains.Get("z_hook_nat_"+hook),
+					"  type nat hook "+hook+" priority %d;\n jump nodeports_clusterips_dnat\n", *hookPrio)
+			}
+		}
+	
 	}
 
 	// filtering
 	filterAll := table.Chains.Get("z_filter_all")
 	fmt.Fprint(filterAll, "  ct state invalid drop\n")
-
-	if table.Chains.Has("filter_external") {
-		fmt.Fprint(filterAll, "  jump filter_external\n")
-	}
-
-	if table.Chains.Has("nodeports_filter") {
-		filterAll.WriteString("  fib daddr type local jump nodeports_filter\n")
-	}
 
 	fmt.Fprintf(table.Chains.Get("z_hook_filter_forward"),
 		"  type filter hook forward priority %d;\n  jump z_filter_all\n", *hookPrio)
